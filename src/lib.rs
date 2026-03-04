@@ -17,6 +17,7 @@ mod util;
 
 use crate::gamedef::{LenientParse, ParsePolicy, StrictParse};
 use crate::resource_provider::{EmbedResourceProvider, FsResourceProvider, ResourceProvider};
+use crate::util::IndentError;
 use clap::{Arg, ArgAction, Command, Subcommand};
 use core::fmt;
 use coz::CozString;
@@ -50,15 +51,15 @@ impl error::Error for ProcessingError {}
 
 fn build_gamedefs_from_resource<Provider: ResourceProvider, Policy: ParsePolicy>() -> Result<Vec<GameDef>, String> {
     let game_defs_json = Provider::get_to_string(GAMEDEFS_FILE)
-        .map_err(|e| format!("Failed to read gamedefs list: {}", e))?;
+        .map_err(|e| format!("Failed to read gamedefs list:\n{}", e.indent()))?;
     let defs = gamedef::build_gamedefs_from_json::<Provider, Policy>(&game_defs_json)
-        .map_err(|e| format!("Failed to load gamedefs: {}", e))?;
+        .map_err(|e| format!("Failed to load gamedefs:\n{}", e.indent()))?;
     Ok(defs)
 }
 
 fn build_gamedefs() -> Result<Vec<GameDef>, String> {
     let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider, StrictParse>()
-        .map_err(|e| format!("Failed to read embed gamedefs: {}", e))?;
+        .map_err(|e| format!("Failed to read embed gamedefs:\n{}", e.indent()))?;
 
     if !FsResourceProvider::exists(GAMEDEFS_FILE) {
         println!("External resources folder not found, using only internal games.");
@@ -70,7 +71,7 @@ fn build_gamedefs() -> Result<Vec<GameDef>, String> {
             all_defs.append(&mut defs);
             println!("The external resources folder was found. External games have been added to the list.")
         }
-        Err(e) => println!("Failed to read gamedefs from fs: {}", e)
+        Err(e) => println!("Failed to read gamedefs from fs:\n{}", e.indent())
     }
 
     Ok(all_defs)

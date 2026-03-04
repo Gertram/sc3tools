@@ -1,3 +1,4 @@
+use crate::util::IndentError;
 use rust_embed::RustEmbed;
 use std::{borrow::Cow, fmt::Display, fs, path::PathBuf};
 
@@ -8,7 +9,7 @@ pub const RESOURCES_DIR: &str = "resources/";
 pub struct ResourceDir;
 
 fn utf8_err<E: Display>(path: &str, e: E) -> String {
-    format!("Invalid UTF-8 in {}: {}", path, e)
+    format!("Invalid UTF-8 in {}:\n{}", path, e.indent())
 }
 
 pub trait ResourceProvider {
@@ -43,7 +44,7 @@ impl FsResourceProvider {
         Self::full_path(path).exists()
     }
     fn read_err<E: Display>(path: &str, e: E) -> String {
-        format!("Could not read fs resource {}: {}", path, e)
+        format!("Could not read fs resource {}:\n{}", path, e.indent())
     }
 }
 impl ResourceProvider for FsResourceProvider {

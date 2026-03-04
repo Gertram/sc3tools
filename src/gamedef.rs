@@ -1,5 +1,6 @@
 use crate::resource_provider::ResourceProvider;
 use crate::text::EncodingMaps;
+use crate::util::IndentError;
 use itertools::Itertools;
 use nom::{
     branch::alt,
@@ -69,12 +70,12 @@ impl GameDef {
         }
 
         let charset: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "charset.utf8"))
-            .map_err(|e| format!("Failed to get charset for {}: {}", full_name, e))?;
+            .map_err(|e| format!("Failed to get charset for {}:\n{}", full_name, e.indent()))?;
         let charset: Vec<char> = charset.chars().collect();
         let compound_chars: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "compound_chars.map"))
-            .map_err(|e| format!("Failed to get compound_chars for {}: {}", full_name, e))?;
+            .map_err(|e| format!("Failed to get compound_chars for {}:\n{}", full_name, e.indent()))?;
         let compound_chars = parse_compound_ch_map::<Policy>(&compound_chars)
-            .map_err(|e| format!("Failed to parse compound_chars for {}: {}", full_name, e))?;
+            .map_err(|e| format!("Failed to parse compound_chars for {}:\n{}", full_name, e.indent()))?;
         let encoding_maps = EncodingMaps::new(&charset, &compound_chars)
             .map_err(|err| {
                 format!(
@@ -112,7 +113,7 @@ pub fn get_by_alias<'a>(defs: &'a [GameDef], alias: &str) -> Option<&'a GameDef>
 
 pub fn build_gamedefs_from_json<Provider: ResourceProvider, Policy: ParsePolicy>(json: &str) -> Result<Vec<GameDef>, String> {
     let defs: Vec<GameDefJson> = serde_json::from_str(json)
-        .map_err(|e| format!("Failed parse gamedef from {}: {}", type_name::<Provider>(), e))?;
+        .map_err(|e| format!("Failed parse gamedef from {}:\n{}", type_name::<Provider>(), e.indent()))?;
     let defs = defs
         .into_iter()
         .filter_map(|d| {
@@ -142,7 +143,7 @@ impl ParsePolicy for StrictParse {
         Err(format!("Parsing stopped early at line {}, col {}. Unhandled tail: {:.50}", line, col, tail))
     }
     fn handle_element_error(config_name: &str, err: &str) -> Result<(), String> {
-        Err(format!("Critical error in '{}': {}", config_name, err))
+        Err(format!("Critical error in '{}':\n{}", config_name, err.indent()))
     }
 }
 
@@ -157,7 +158,7 @@ impl ParsePolicy for LenientParse {
         Ok(())
     }
     fn handle_element_error(config_name: &str, err: &str) -> Result<(), String> {
-        eprintln!("Warning: Skipping game '{}' due to error: {}", config_name, err);
+        eprintln!("Warning: Skipping game '{}' due to error:\n{}", config_name, err.indent());
         Ok(())
     }
 }
@@ -232,10 +233,10 @@ fn parse_compound_ch_map<Policy: ParsePolicy>(i: &str) -> Result<HashMap<char, A
             let end = peek.find('\n').unwrap_or(limit);
             let error_line_text = &peek[..end].trim_end_matches('\r');
             format!(
-                "Parsing error at line {}, column {}: {}",
+                "Parsing error at line {}, column {}:\n{}",
                 e.input.location_line(),
                 e.input.get_utf8_column(),
-                error_line_text
+                error_line_text.indent()
             )
         })?;
 
