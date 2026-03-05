@@ -9,6 +9,7 @@ use nom::{
     sequence::{delimited, pair, preceded, tuple},
     Finish, IResult,
 };
+use nom_locate::LocatedSpan;
 use serde::Deserialize;
 use serde_json;
 use std::{any::type_name, borrow::Cow, collections::HashMap, ops::RangeInclusive};
@@ -125,6 +126,8 @@ struct PuaMapping<'a> {
     ch: &'a str,
 }
 
+type Span<'a> = LocatedSpan<&'a str>;
+
 impl<'a> PuaMapping<'a> {
     fn new(codepoint_range: RangeInclusive<char>, ch: &'a str) -> Self {
         Self {
@@ -133,15 +136,15 @@ impl<'a> PuaMapping<'a> {
         }
     }
 
-    pub fn parse(i: &str) -> IResult<&str, PuaMapping> {
-        fn codepoint(i: &str) -> IResult<&str, char> {
+    pub fn parse(i: Span) -> IResult<Span, PuaMapping> {
+        fn codepoint(i: Span) -> IResult<Span, char> {
             map_opt(
-                map_res(is_not("-]"), |s| u32::from_str_radix(s, 16)),
+                map_res(is_not("-]"), |s: Span| u32::from_str_radix(s.fragment(), 16)),
                 std::char::from_u32,
             )(i)
         }
 
-        fn range(i: &str) -> IResult<&str, RangeInclusive<char>> {
+        fn range(i: Span) -> IResult<Span, RangeInclusive<char>> {
             map(
                 delimited(
                     char('['),
@@ -156,20 +159,37 @@ impl<'a> PuaMapping<'a> {
         }
 
         map(tuple((range, char('='), not_line_ending)), |(r, _, ch)| {
-            PuaMapping::new(r, ch)
+            PuaMapping::new(r, ch.fragment())
         })(i)
     }
 }
 
 fn parse_compound_ch_map(i: &str) -> Result<HashMap<char, String>, String> {
-    let (remaining, mappings) = separated_list0(line_ending, PuaMapping::parse)(i)
-        .finish()
-        .map_err(|e| format!("Parsing error: {:?}", e))?;
+    let input_span = Span::new(i);
 
-    let tail = remaining.trim();
+    let (remaining, mappings) = separated_list0(line_ending, PuaMapping::parse)(input_span)
+        .finish()
+        .map_err(|e| {
+            format!(
+                "Parsing error at line {}, column {}: {}",
+                e.input.location_line(),
+                e.input.get_utf8_column(),
+                e
+            )
+        })?;
+
+    let tail = remaining.fragment().trim();
     if !tail.is_empty() {
         let preview = if tail.len() > 50 { format!("{:.50}...", tail) } else { tail.to_owned() };
-        return Err(format!("Parsing stopped early. Unhandled data: {:?}", preview));
+        return Err(format!(
+            "Parsing stopped early at line {}, column {}. \
+            Unhandled data: {:?}. \
+            Successfully collected: {} items.",
+            remaining.location_line(),
+            remaining.get_utf8_column(),
+            preview,
+            mappings.len()
+        ));
     }
 
     let mappings = mappings
@@ -190,12 +210,12 @@ mod tests {
     #[test]
     fn parse_pua_mapping() {
         assert_eq!(
-            PuaMapping::parse("[E01C]=meow").unwrap().1,
+            PuaMapping::parse(Span::new("[E01C]=meow")).unwrap().1,
             PuaMapping::new('\u{E01C}'..='\u{E01C}', "meow")
         );
 
         assert_eq!(
-            PuaMapping::parse("[E01C-E01F]=¹⁸").unwrap().1,
+            PuaMapping::parse(Span::new("[E01C-E01F]=¹⁸")).unwrap().1,
             PuaMapping::new('\u{E01C}'..='\u{E01F}', "¹⁸")
         );
     }
