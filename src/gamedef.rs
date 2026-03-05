@@ -2,9 +2,9 @@ use crate::resource_provider::ResourceProvider;
 use crate::text::EncodingMaps;
 use itertools::Itertools;
 use nom::{
-    bytes::complete::is_not,
-    character::complete::{char, line_ending, not_line_ending},
-    combinator::{map, map_opt, map_res, opt},
+    branch::alt,
+    character::complete::{char, hex_digit1, line_ending, not_line_ending},
+    combinator::{cut, map, map_opt, map_res, opt, verify},
     multi::separated_list0,
     sequence::{delimited, pair, preceded, tuple},
     Finish, IResult,
@@ -128,12 +128,16 @@ pub fn build_gamedefs_from_json<Provider: ResourceProvider, Policy: ParsePolicy>
 }
 
 pub trait ParsePolicy {
+    fn on_invalid_line(line: u32, col: usize, text: &str) -> Result<(), ()>;
     fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String>;
     fn handle_element_error(config_name: &str, err: &str) -> Result<(), String>;
 }
 
 pub struct StrictParse;
 impl ParsePolicy for StrictParse {
+    fn on_invalid_line(_line: u32, _col: usize, _text: &str) -> Result<(), ()> {
+        Err(())
+    }
     fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String> {
         Err(format!("Parsing stopped early at line {}, col {}. Unhandled tail: {:.50}", line, col, tail))
     }
@@ -144,6 +148,10 @@ impl ParsePolicy for StrictParse {
 
 pub struct LenientParse;
 impl ParsePolicy for LenientParse {
+    fn on_invalid_line(line: u32, col: usize, text: &str) -> Result<(), ()> {
+        eprintln!("WARNING: Skipping invalid data (line {}, col {}): {}", line, col, text);
+        Ok(())
+    }
     fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String> {
         eprintln!("WARNING: Unparsed tail at line {}, col {}. Unhandled tail: {:.50}", line, col, tail);
         Ok(())
@@ -173,7 +181,7 @@ impl<'a> PuaMapping<'a> {
     pub fn parse(i: Span) -> IResult<Span, PuaMapping> {
         fn codepoint(i: Span) -> IResult<Span, char> {
             map_opt(
-                map_res(is_not("-]"), |s: Span| u32::from_str_radix(s.fragment(), 16)),
+                map_res(hex_digit1, |s: Span| u32::from_str_radix(s.fragment(), 16)),
                 std::char::from_u32,
             )(i)
         }
@@ -198,10 +206,22 @@ impl<'a> PuaMapping<'a> {
     }
 }
 
-fn parse_compound_ch_map<P: ParsePolicy>(i: &str) -> Result<HashMap<char, String>, String> {
+fn parse_line<P: ParsePolicy>(i: Span) -> IResult<Span, Option<PuaMapping>> {
+    alt((
+        map(PuaMapping::parse, Some),
+        map(preceded(char('#'), not_line_ending), |_| None),
+        map(verify(not_line_ending, |s: &Span| s.fragment().trim().is_empty()), |_| None),
+        cut(map_res(not_line_ending, |bad: Span| {
+            P::on_invalid_line(bad.location_line(), bad.get_utf8_column(), bad.fragment())
+                .map(|_| None)
+        })),
+    ))(i)
+}
+
+fn parse_compound_ch_map<Policy: ParsePolicy>(i: &str) -> Result<HashMap<char, String>, String> {
     let input_span = Span::new(i);
 
-    let (remaining, mappings) = separated_list0(line_ending, PuaMapping::parse)(input_span)
+    let (remaining, mappings) = separated_list0(line_ending, parse_line::<Policy>)(input_span)
         .finish()
         .map_err(|e| {
             let fragment = e.input.fragment();
@@ -221,15 +241,15 @@ fn parse_compound_ch_map<P: ParsePolicy>(i: &str) -> Result<HashMap<char, String
 
     let tail = remaining.fragment().trim();
     if !tail.is_empty() {
-        P::on_unparsed_tail(remaining.location_line(), remaining.get_utf8_column(), tail)?;
+        Policy::on_unparsed_tail(remaining.location_line(), remaining.get_utf8_column(), tail)?;
     }
 
     let mappings = mappings
-        .iter()
-        .flat_map(|m| {
-            m.codepoint_range
-                .clone()
-                .map(move |codepoint| (codepoint, m.ch.to_string()))
+        .into_iter()
+        .flatten()
+        .flat_map(|PuaMapping { codepoint_range, ch }|{
+            codepoint_range
+                .map(move |codepoint| (codepoint, ch.to_owned()))
         })
         .collect();
     Ok(mappings)
