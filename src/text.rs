@@ -4,7 +4,7 @@ use nom::{
 };
 
 use crate::gamedef::GameDef;
-use std::{borrow::Cow, collections::HashMap, error, fmt};
+use std::{borrow::Cow, collections::HashMap, error, fmt, sync::Arc};
 
 pub const FULLWIDTH_SPACE: char = '\u{3000}';
 
@@ -101,13 +101,13 @@ pub struct EncodingMapConstructionError {
 
 pub struct EncodingMaps {
     main: HashMap<char, u16>,
-    compound: HashMap<String, u16>,
+    compound: HashMap<Arc<str>, u16>,
 }
 
 impl EncodingMaps {
     pub fn new(
         charset: &[char],
-        pua_mappings: &HashMap<char, String>,
+        pua_mappings: &HashMap<char, Arc<str>>,
     ) -> Result<Self, EncodingMapConstructionError> {
         let main: HashMap<_, _> = (0..charset.len())
             .map(|i| {
@@ -194,7 +194,7 @@ pub fn decode_str<'a>(
 pub fn decode_char<'a>(
     code: u16,
     charset: &[char],
-    compound_map: &'a HashMap<char, String>,
+    compound_map: &'a HashMap<char, Arc<str>>,
 ) -> Result<Char<'a>, EncodingError> {
     let i = (code & 0x7FFF) as usize;
     let ch = charset

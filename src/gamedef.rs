@@ -12,7 +12,7 @@ use nom::{
 use nom_locate::LocatedSpan;
 use serde::Deserialize;
 use serde_json;
-use std::{any::type_name, borrow::Cow, collections::HashMap, ops::RangeInclusive};
+use std::{any::type_name, borrow::Cow, collections::HashMap, ops::RangeInclusive, sync::Arc};
 
 pub struct GameDef {
     #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub struct GameDef {
     #[allow(dead_code)]
     reserved_codepoints: Option<RangeInclusive<char>>,
     charset: Vec<char>,
-    pub compound_chars: HashMap<char, String>,
+    pub compound_chars: HashMap<char, Arc<str>>,
     pub encoding_maps: EncodingMaps,
     pub fullwidth_blocklist: Vec<char>,
 }
@@ -218,7 +218,7 @@ fn parse_line<P: ParsePolicy>(i: Span) -> IResult<Span, Option<PuaMapping>> {
     ))(i)
 }
 
-fn parse_compound_ch_map<Policy: ParsePolicy>(i: &str) -> Result<HashMap<char, String>, String> {
+fn parse_compound_ch_map<Policy: ParsePolicy>(i: &str) -> Result<HashMap<char, Arc<str>>, String> {
     let input_span = Span::new(i);
 
     let (remaining, mappings) = separated_list0(line_ending, parse_line::<Policy>)(input_span)
@@ -248,8 +248,9 @@ fn parse_compound_ch_map<Policy: ParsePolicy>(i: &str) -> Result<HashMap<char, S
         .into_iter()
         .flatten()
         .flat_map(|PuaMapping { codepoint_range, ch }|{
+            let shared: Arc<str> = Arc::from(ch);
             codepoint_range
-                .map(move |codepoint| (codepoint, ch.to_owned()))
+                .map(move |codepoint| (codepoint, Arc::clone(&shared)))
         })
         .collect();
     Ok(mappings)
