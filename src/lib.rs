@@ -13,8 +13,9 @@ mod gamedef;
 mod resource_provider;
 mod sc3;
 mod text;
+mod util;
 
-use crate::resource_provider::{EmbedResourceProvider, ResourceProvider};
+use crate::resource_provider::{EmbedResourceProvider, FsResourceProvider, ResourceProvider};
 use clap::{Arg, ArgAction, Command, Subcommand};
 use core::fmt;
 use coz::CozString;
@@ -53,8 +54,23 @@ fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Vec<GameDef> {
     defs
 }
 
+fn build_gamedefs() -> Vec<GameDef> {
+    let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider>();
+
+    if !FsResourceProvider::exists(GAMEDEFS_FILE) {
+        println!("External resources folder not found, using only internal games.");
+        return all_defs;
+    }
+
+    let mut defs = build_gamedefs_from_resource::<FsResourceProvider>();
+    all_defs.append(&mut defs);
+    println!("The external resources folder was found. External games have been added to the list.");
+
+    all_defs
+}
+
 pub fn run() -> Result<(), Box<dyn Error>> {
-    let defs = build_gamedefs_from_resource::<EmbedResourceProvider>();
+    let defs = build_gamedefs();
 
     let supported_games: Vec<String> = defs.iter()
         .flat_map(|v| v.aliases.iter().cloned()) // Clone the strings to own them
