@@ -382,6 +382,7 @@ impl fmt::Display for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource_provider::EmbedResourceProvider;
 
     static SG0_DEF_JSON: &str = r#"
     [{
@@ -395,7 +396,7 @@ mod tests {
         "fullwidth_blocklist": ["'", "-", "[", "]", "(", ")"]
     }]"#;
 
-    static DEFS: std::sync::LazyLock<Vec<gamedef::GameDef>> = std::sync::LazyLock::new(|| gamedef::build_gamedefs_from_json(SG0_DEF_JSON));
+    static DEFS: std::sync::LazyLock<Vec<gamedef::GameDef>> = std::sync::LazyLock::new(|| gamedef::build_gamedefs_from_json::<EmbedResourceProvider>(SG0_DEF_JSON));
 
 
     #[test]

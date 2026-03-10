@@ -10,9 +10,11 @@ extern crate termcolor;
 mod coz;
 mod format;
 mod gamedef;
+mod resource_provider;
 mod sc3;
 mod text;
 
+use crate::resource_provider::{EmbedResourceProvider, ResourceProvider};
 use clap::{Arg, ArgAction, Command, Subcommand};
 use core::fmt;
 use coz::CozString;
@@ -40,13 +42,20 @@ enum ProcessingError {
     LineCountMismatch,
 }
 
+pub const GAMEDEFS_FILE: &str = "gamedefs.json";
+
 impl error::Error for ProcessingError {}
 
-pub fn run() -> Result<(), Box<dyn Error>> {
-    
-    let game_defs_file = gamedef::ResourceDir::get("gamedefs.json").unwrap();
+fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Vec<GameDef> {
+    let game_defs_file = Provider::get(GAMEDEFS_FILE);
     let game_defs_json = std::str::from_utf8(game_defs_file.as_ref()).unwrap();
-    let defs = gamedef::build_gamedefs_from_json(game_defs_json);
+    let defs = gamedef::build_gamedefs_from_json::<Provider>(game_defs_json);
+    defs
+}
+
+pub fn run() -> Result<(), Box<dyn Error>> {
+    let defs = build_gamedefs_from_resource::<EmbedResourceProvider>();
+
     let supported_games: Vec<String> = defs.iter()
         .flat_map(|v| v.aliases.iter().cloned()) // Clone the strings to own them
         .collect();

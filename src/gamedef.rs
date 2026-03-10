@@ -1,3 +1,4 @@
+use crate::resource_provider::ResourceProvider;
 use crate::text::EncodingMaps;
 use itertools::Itertools;
 use nom::{
@@ -8,14 +9,9 @@ use nom::{
     sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
-use rust_embed::RustEmbed;
-use std::{borrow::Cow, collections::HashMap, ops::RangeInclusive};
 use serde::Deserialize;
 use serde_json;
-
-#[derive(RustEmbed)]
-#[folder = "resources/"]
-pub struct ResourceDir;
+use std::{borrow::Cow, collections::HashMap, ops::RangeInclusive};
 
 pub struct GameDef {
     #[allow(dead_code)]
@@ -39,9 +35,13 @@ pub struct GameDefJson<'a> {
     pub fullwidth_blocklist: Vec<char>,
 }
 
-impl<'a> From<GameDefJson<'a>> for GameDef {
-    fn from(json: GameDefJson<'a>) -> Self {
-        Self::new(
+pub trait FromResource<T> {
+    fn from_with<Provider: ResourceProvider>(value: T) -> Self;
+}
+
+impl<'a> FromResource<GameDefJson<'a>> for GameDef {
+    fn from_with<Provider: ResourceProvider>(json: GameDefJson<'a>) -> Self {
+        Self::new::<Provider>(
             json.name,
             json.resource_dir,
             json.aliases,
@@ -52,7 +52,7 @@ impl<'a> From<GameDefJson<'a>> for GameDef {
 }
 
 impl GameDef {
-    pub fn new(
+    pub fn new<Provider: ResourceProvider>(
         full_name: String,
         resource_dir: &str,
         aliases: Vec<String>,
@@ -63,14 +63,12 @@ impl GameDef {
             format!("{}/{}", resource_dir, name)
         }
 
-        let charset: Cow<[u8]> =
-            ResourceDir::get(&file_path(resource_dir, "charset.utf8")).unwrap();
+        let charset: Cow<[u8]> = Provider::get(&file_path(resource_dir, "charset.utf8"));
         let charset: Vec<char> = std::str::from_utf8(charset.as_ref())
             .unwrap()
             .chars()
             .collect();
-        let compound_chars: Cow<[u8]> =
-            ResourceDir::get(&file_path(resource_dir, "compound_chars.map")).unwrap();
+        let compound_chars: Cow<[u8]> = Provider::get(&file_path(resource_dir, "compound_chars.map"));
         let compound_chars = std::str::from_utf8(compound_chars.as_ref()).unwrap();
         let compound_chars = parse_compound_ch_map(compound_chars);
         let encoding_maps = EncodingMaps::new(&charset, &compound_chars);
@@ -108,9 +106,9 @@ pub fn get_by_alias<'a>(defs: &'a [GameDef], alias: &str) -> Option<&'a GameDef>
     defs.iter().find(|x| x.aliases.iter().any(|a| a == alias))
 }
 
-pub fn build_gamedefs_from_json(json: &str) -> Vec<GameDef> {
+pub fn build_gamedefs_from_json<Provider: ResourceProvider>(json: &str) -> Vec<GameDef> {
     let defs: Vec<GameDefJson> = serde_json::from_str(json).unwrap();
-    defs.into_iter().map(GameDef::from).collect()
+    defs.into_iter().map(GameDef::from_with::<Provider>).collect()
 }
 
 #[derive(Eq, PartialEq, Debug)]
