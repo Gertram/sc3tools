@@ -48,9 +48,8 @@ pub const GAMEDEFS_FILE: &str = "gamedefs.json";
 impl error::Error for ProcessingError {}
 
 fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Vec<GameDef> {
-    let game_defs_file = Provider::get(GAMEDEFS_FILE);
-    let game_defs_json = std::str::from_utf8(game_defs_file.as_ref()).unwrap();
-    let defs = gamedef::build_gamedefs_from_json::<Provider>(game_defs_json);
+    let game_defs_json = Provider::get_to_string(GAMEDEFS_FILE);
+    let defs = gamedef::build_gamedefs_from_json::<Provider>(&game_defs_json);
     defs
 }
 

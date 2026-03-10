@@ -9,6 +9,12 @@ pub struct ResourceDir;
 
 pub trait ResourceProvider {
     fn get(path: &str) -> Cow<'static, [u8]>;
+    fn get_to_string(path: &str) -> Cow<'static, str> {
+        match Self::get(path) {
+            Cow::Borrowed(bytes) => std::str::from_utf8(bytes).map(Cow::Borrowed).unwrap(),
+            Cow::Owned(bytes) => String::from_utf8(bytes).map(Cow::Owned).unwrap(),
+        }
+    }
 }
 
 pub struct EmbedResourceProvider;
@@ -30,5 +36,10 @@ impl FsResourceProvider {
 impl ResourceProvider for FsResourceProvider {
     fn get(path: &str) -> Cow<'static, [u8]> {
         fs::read(Self::full_path(path)).map(Cow::Owned).unwrap()
+    }
+    fn get_to_string(path: &str) -> Cow<'static, str> {
+        fs::read_to_string(Self::full_path(path))
+            .map(Cow::Owned)
+            .unwrap()
     }
 }

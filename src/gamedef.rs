@@ -63,14 +63,10 @@ impl GameDef {
             format!("{}/{}", resource_dir, name)
         }
 
-        let charset: Cow<[u8]> = Provider::get(&file_path(resource_dir, "charset.utf8"));
-        let charset: Vec<char> = std::str::from_utf8(charset.as_ref())
-            .unwrap()
-            .chars()
-            .collect();
-        let compound_chars: Cow<[u8]> = Provider::get(&file_path(resource_dir, "compound_chars.map"));
-        let compound_chars = std::str::from_utf8(compound_chars.as_ref()).unwrap();
-        let compound_chars = parse_compound_ch_map(compound_chars);
+        let charset: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "charset.utf8"));
+        let charset: Vec<char> = charset.chars().collect();
+        let compound_chars: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "compound_chars.map"));
+        let compound_chars = parse_compound_ch_map(&compound_chars);
         let encoding_maps = EncodingMaps::new(&charset, &compound_chars);
 
         if let Err(err) = encoding_maps {
