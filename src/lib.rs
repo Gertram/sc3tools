@@ -47,29 +47,36 @@ pub const GAMEDEFS_FILE: &str = "gamedefs.json";
 
 impl error::Error for ProcessingError {}
 
-fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Vec<GameDef> {
-    let game_defs_json = Provider::get_to_string(GAMEDEFS_FILE);
-    let defs = gamedef::build_gamedefs_from_json::<Provider>(&game_defs_json);
-    defs
+fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Result<Vec<GameDef>, String> {
+    let game_defs_json = Provider::get_to_string(GAMEDEFS_FILE)
+        .map_err(|e| format!("Failed to read gamedefs list: {}", e))?;
+    let defs = gamedef::build_gamedefs_from_json::<Provider>(&game_defs_json)
+        .map_err(|e| format!("Failed to load gamedefs: {}", e))?;
+    Ok(defs)
 }
 
-fn build_gamedefs() -> Vec<GameDef> {
-    let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider>();
+fn build_gamedefs() -> Result<Vec<GameDef>, String> {
+    let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider>()
+        .map_err(|e| format!("Failed to read embed gamedefs: {}", e))?;
 
     if !FsResourceProvider::exists(GAMEDEFS_FILE) {
         println!("External resources folder not found, using only internal games.");
-        return all_defs;
+        return Ok(all_defs);
     }
 
-    let mut defs = build_gamedefs_from_resource::<FsResourceProvider>();
-    all_defs.append(&mut defs);
-    println!("The external resources folder was found. External games have been added to the list.");
+    match build_gamedefs_from_resource::<FsResourceProvider>() {
+        Ok(mut defs) => {
+            all_defs.append(&mut defs);
+            println!("The external resources folder was found. External games have been added to the list.")
+        }
+        Err(e) => println!("Failed to read gamedefs from fs: {}", e)
+    }
 
-    all_defs
+    Ok(all_defs)
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
-    let defs = build_gamedefs();
+    let defs = build_gamedefs()?;
 
     let supported_games: Vec<String> = defs.iter()
         .flat_map(|v| v.aliases.iter().cloned()) // Clone the strings to own them

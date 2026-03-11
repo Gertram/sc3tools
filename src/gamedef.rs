@@ -7,11 +7,11 @@ use nom::{
     combinator::{map, map_opt, map_res, opt},
     multi::separated_list0,
     sequence::{delimited, pair, preceded, tuple},
-    IResult,
+    Finish, IResult,
 };
 use serde::Deserialize;
 use serde_json;
-use std::{borrow::Cow, collections::HashMap, ops::RangeInclusive};
+use std::{any::type_name, borrow::Cow, collections::HashMap, ops::RangeInclusive};
 
 pub struct GameDef {
     #[allow(dead_code)]
@@ -35,12 +35,16 @@ pub struct GameDefJson<'a> {
     pub fullwidth_blocklist: Vec<char>,
 }
 
-pub trait FromResource<T> {
-    fn from_with<Provider: ResourceProvider>(value: T) -> Self;
+pub trait TryFromResource<T> {
+    type Error;
+    fn try_from_with<Provider: ResourceProvider>(value: T) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
 }
 
-impl<'a> FromResource<GameDefJson<'a>> for GameDef {
-    fn from_with<Provider: ResourceProvider>(json: GameDefJson<'a>) -> Self {
+impl<'a> TryFromResource<GameDefJson<'a>> for GameDef {
+    type Error = String;
+    fn try_from_with<Provider: ResourceProvider>(json: GameDefJson<'a>) -> Result<Self, Self::Error> {
         Self::new::<Provider>(
             json.name,
             json.resource_dir,
@@ -58,38 +62,41 @@ impl GameDef {
         aliases: Vec<String>,
         reserved_codepoints: Option<RangeInclusive<char>>,
         fullwidth_blocklist: Vec<char>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         fn file_path(resource_dir: &str, name: &'static str) -> String {
             format!("{}/{}", resource_dir, name)
         }
 
-        let charset: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "charset.utf8"));
+        let charset: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "charset.utf8"))
+            .map_err(|e| format!("Failed to get charset for {}: {}", full_name, e))?;
         let charset: Vec<char> = charset.chars().collect();
-        let compound_chars: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "compound_chars.map"));
-        let compound_chars = parse_compound_ch_map(&compound_chars);
-        let encoding_maps = EncodingMaps::new(&charset, &compound_chars);
+        let compound_chars: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "compound_chars.map"))
+            .map_err(|e| format!("Failed to get compound_chars for {}: {}", full_name, e))?;
+        let compound_chars = parse_compound_ch_map(&compound_chars)
+            .map_err(|e| format!("Failed to parse compound_chars for {}: {}", full_name, e))?;
+        let encoding_maps = EncodingMaps::new(&charset, &compound_chars)
+            .map_err(|err| {
+                format!(
+                    "Error while constructing encoding maps for {}. \
+                    The following Private Use Area characters were not found in the charset: [{}]",
+                    full_name,
+                    err.missing_pua_chars
+                        .into_iter()
+                        .map(|ch| format!("'{}'", ch.escape_unicode()))
+                        .join(", ")
+                )
+            })?;
 
-        if let Err(err) = encoding_maps {
-            panic!(
-                "Error while constructing encoding maps for {}. \
-                The following Private Use Area characters were not found in the charset: [{}]",
-                full_name,
-                err.missing_pua_chars
-                    .into_iter()
-                    .map(|ch| format!("'{}'", ch.escape_unicode()))
-                    .join(", ")
-            );
-        }
-
-        Self {
+        let def = Self {
             full_name,
             aliases,
             reserved_codepoints,
             charset,
             compound_chars,
-            encoding_maps: encoding_maps.unwrap(),
+            encoding_maps,
             fullwidth_blocklist,
-        }
+        };
+        Ok(def)
     }
 
     pub fn charset(&self) -> &[char] {
@@ -102,9 +109,14 @@ pub fn get_by_alias<'a>(defs: &'a [GameDef], alias: &str) -> Option<&'a GameDef>
     defs.iter().find(|x| x.aliases.iter().any(|a| a == alias))
 }
 
-pub fn build_gamedefs_from_json<Provider: ResourceProvider>(json: &str) -> Vec<GameDef> {
-    let defs: Vec<GameDefJson> = serde_json::from_str(json).unwrap();
-    defs.into_iter().map(GameDef::from_with::<Provider>).collect()
+pub fn build_gamedefs_from_json<Provider: ResourceProvider>(json: &str) -> Result<Vec<GameDef>, String> {
+    let defs: Vec<GameDefJson> = serde_json::from_str(json)
+        .map_err(|e| format!("Failed parse gamedef from {}: {}", type_name::<Provider>(), e))?;
+    let defs = defs
+        .into_iter()
+        .map(GameDef::try_from_with::<Provider>)
+        .collect::<Result<Vec<GameDef>, String>>()?;
+    Ok(defs)
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -149,16 +161,26 @@ impl<'a> PuaMapping<'a> {
     }
 }
 
-fn parse_compound_ch_map(i: &str) -> HashMap<char, String> {
-    let mappings = separated_list0(line_ending, PuaMapping::parse)(i).unwrap().1;
-    mappings
+fn parse_compound_ch_map(i: &str) -> Result<HashMap<char, String>, String> {
+    let (remaining, mappings) = separated_list0(line_ending, PuaMapping::parse)(i)
+        .finish()
+        .map_err(|e| format!("Parsing error: {:?}", e))?;
+
+    let tail = remaining.trim();
+    if !tail.is_empty() {
+        let preview = if tail.len() > 50 { format!("{:.50}...", tail) } else { tail.to_owned() };
+        return Err(format!("Parsing stopped early. Unhandled data: {:?}", preview));
+    }
+
+    let mappings = mappings
         .iter()
         .flat_map(|m| {
             m.codepoint_range
                 .clone()
                 .map(move |codepoint| (codepoint, m.ch.to_string()))
         })
-        .collect()
+        .collect();
+    Ok(mappings)
 }
 
 #[cfg(test)]

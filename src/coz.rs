@@ -396,7 +396,7 @@ mod tests {
         "fullwidth_blocklist": ["'", "-", "[", "]", "(", ")"]
     }]"#;
 
-    static DEFS: std::sync::LazyLock<Vec<gamedef::GameDef>> = std::sync::LazyLock::new(|| util::build_embed_gamedefs_from_json(SG0_DEF_JSON));
+    static DEFS: std::sync::LazyLock<Vec<gamedef::GameDef>> = std::sync::LazyLock::new(|| util::build_embed_gamedefs_from_json(SG0_DEF_JSON).expect("Initialization failed"));
 
 
     #[test]

@@ -1,5 +1,5 @@
 use rust_embed::RustEmbed;
-use std::{borrow::Cow, fs, path::PathBuf};
+use std::{borrow::Cow, fmt::Display, fs, path::PathBuf};
 
 pub const RESOURCES_DIR: &str = "resources/";
 
@@ -7,20 +7,30 @@ pub const RESOURCES_DIR: &str = "resources/";
 #[folder = "resources/"]
 pub struct ResourceDir;
 
+fn utf8_err<E: Display>(path: &str, e: E) -> String {
+    format!("Invalid UTF-8 in {}: {}", path, e)
+}
+
 pub trait ResourceProvider {
-    fn get(path: &str) -> Cow<'static, [u8]>;
-    fn get_to_string(path: &str) -> Cow<'static, str> {
-        match Self::get(path) {
-            Cow::Borrowed(bytes) => std::str::from_utf8(bytes).map(Cow::Borrowed).unwrap(),
-            Cow::Owned(bytes) => String::from_utf8(bytes).map(Cow::Owned).unwrap(),
+    fn get(path: &str) -> Result<Cow<'static, [u8]>, String>;
+    fn get_to_string(path: &str) -> Result<Cow<'static, str>, String> {
+        match Self::get(path)? {
+            Cow::Borrowed(b) => std::str::from_utf8(b)
+                .map(Cow::Borrowed)
+                .map_err(|e| utf8_err(path, e)),
+            Cow::Owned(v) => String::from_utf8(v)
+                .map(Cow::Owned)
+                .map_err(|e| utf8_err(path, e)),
         }
     }
 }
 
 pub struct EmbedResourceProvider;
 impl ResourceProvider for EmbedResourceProvider {
-    fn get(path: &str) -> Cow<'static, [u8]> {
-        ResourceDir::get(path).unwrap()
+    fn get(path: &str) -> Result<Cow<'static, [u8]>, String> {
+        ResourceDir::get(path)
+            .map(|file| file)
+            .ok_or_else(|| format!("Could not read embed resource {}", path))
     }
 }
 
@@ -32,14 +42,25 @@ impl FsResourceProvider {
     pub fn exists(path: &str) -> bool {
         Self::full_path(path).exists()
     }
+    fn read_err<E: Display>(path: &str, e: E) -> String {
+        format!("Could not read fs resource {}: {}", path, e)
+    }
 }
 impl ResourceProvider for FsResourceProvider {
-    fn get(path: &str) -> Cow<'static, [u8]> {
-        fs::read(Self::full_path(path)).map(Cow::Owned).unwrap()
+    fn get(path: &str) -> Result<Cow<'static, [u8]>, String> {
+        fs::read(Self::full_path(path))
+            .map(Cow::Owned)
+            .map_err(|e| Self::read_err(path, e))
     }
-    fn get_to_string(path: &str) -> Cow<'static, str> {
+    fn get_to_string(path: &str) -> Result<Cow<'static, str>, String> {
         fs::read_to_string(Self::full_path(path))
             .map(Cow::Owned)
-            .unwrap()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    return utf8_err(path, e);
+                } else {
+                    Self::read_err(path, e)
+                }
+            })
     }
 }
