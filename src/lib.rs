@@ -15,6 +15,7 @@ mod sc3;
 mod text;
 mod util;
 
+use crate::gamedef::{LenientParse, ParsePolicy, StrictParse};
 use crate::resource_provider::{EmbedResourceProvider, FsResourceProvider, ResourceProvider};
 use clap::{Arg, ArgAction, Command, Subcommand};
 use core::fmt;
@@ -47,16 +48,16 @@ pub const GAMEDEFS_FILE: &str = "gamedefs.json";
 
 impl error::Error for ProcessingError {}
 
-fn build_gamedefs_from_resource<Provider: ResourceProvider>() -> Result<Vec<GameDef>, String> {
+fn build_gamedefs_from_resource<Provider: ResourceProvider, Policy: ParsePolicy>() -> Result<Vec<GameDef>, String> {
     let game_defs_json = Provider::get_to_string(GAMEDEFS_FILE)
         .map_err(|e| format!("Failed to read gamedefs list: {}", e))?;
-    let defs = gamedef::build_gamedefs_from_json::<Provider>(&game_defs_json)
+    let defs = gamedef::build_gamedefs_from_json::<Provider, Policy>(&game_defs_json)
         .map_err(|e| format!("Failed to load gamedefs: {}", e))?;
     Ok(defs)
 }
 
 fn build_gamedefs() -> Result<Vec<GameDef>, String> {
-    let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider>()
+    let mut all_defs = build_gamedefs_from_resource::<EmbedResourceProvider, StrictParse>()
         .map_err(|e| format!("Failed to read embed gamedefs: {}", e))?;
 
     if !FsResourceProvider::exists(GAMEDEFS_FILE) {
@@ -64,7 +65,7 @@ fn build_gamedefs() -> Result<Vec<GameDef>, String> {
         return Ok(all_defs);
     }
 
-    match build_gamedefs_from_resource::<FsResourceProvider>() {
+    match build_gamedefs_from_resource::<FsResourceProvider, LenientParse>() {
         Ok(mut defs) => {
             all_defs.append(&mut defs);
             println!("The external resources folder was found. External games have been added to the list.")

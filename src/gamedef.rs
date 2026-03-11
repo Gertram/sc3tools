@@ -38,15 +38,15 @@ pub struct GameDefJson<'a> {
 
 pub trait TryFromResource<T> {
     type Error;
-    fn try_from_with<Provider: ResourceProvider>(value: T) -> Result<Self, Self::Error>
+    fn try_from_with<Provider: ResourceProvider, Policy: ParsePolicy>(value: T) -> Result<Self, Self::Error>
     where
         Self: Sized;
 }
 
 impl<'a> TryFromResource<GameDefJson<'a>> for GameDef {
     type Error = String;
-    fn try_from_with<Provider: ResourceProvider>(json: GameDefJson<'a>) -> Result<Self, Self::Error> {
-        Self::new::<Provider>(
+    fn try_from_with<Provider: ResourceProvider, Policy: ParsePolicy>(json: GameDefJson<'a>) -> Result<Self, Self::Error> {
+        Self::new::<Provider, Policy>(
             json.name,
             json.resource_dir,
             json.aliases,
@@ -57,7 +57,7 @@ impl<'a> TryFromResource<GameDefJson<'a>> for GameDef {
 }
 
 impl GameDef {
-    pub fn new<Provider: ResourceProvider>(
+    pub fn new<Provider: ResourceProvider, Policy: ParsePolicy>(
         full_name: String,
         resource_dir: &str,
         aliases: Vec<String>,
@@ -73,7 +73,7 @@ impl GameDef {
         let charset: Vec<char> = charset.chars().collect();
         let compound_chars: Cow<str> = Provider::get_to_string(&file_path(resource_dir, "compound_chars.map"))
             .map_err(|e| format!("Failed to get compound_chars for {}: {}", full_name, e))?;
-        let compound_chars = parse_compound_ch_map(&compound_chars)
+        let compound_chars = parse_compound_ch_map::<Policy>(&compound_chars)
             .map_err(|e| format!("Failed to parse compound_chars for {}: {}", full_name, e))?;
         let encoding_maps = EncodingMaps::new(&charset, &compound_chars)
             .map_err(|err| {
@@ -110,14 +110,48 @@ pub fn get_by_alias<'a>(defs: &'a [GameDef], alias: &str) -> Option<&'a GameDef>
     defs.iter().find(|x| x.aliases.iter().any(|a| a == alias))
 }
 
-pub fn build_gamedefs_from_json<Provider: ResourceProvider>(json: &str) -> Result<Vec<GameDef>, String> {
+pub fn build_gamedefs_from_json<Provider: ResourceProvider, Policy: ParsePolicy>(json: &str) -> Result<Vec<GameDef>, String> {
     let defs: Vec<GameDefJson> = serde_json::from_str(json)
         .map_err(|e| format!("Failed parse gamedef from {}: {}", type_name::<Provider>(), e))?;
     let defs = defs
         .into_iter()
-        .map(GameDef::try_from_with::<Provider>)
+        .filter_map(|d| {
+            let config_name = d.name.clone();
+
+            GameDef::try_from_with::<Provider, Policy>(d)
+                .map(Some)
+                .or_else(|e| Policy::handle_element_error(&config_name, &e).map(|_| None))
+                .transpose()
+        })
         .collect::<Result<Vec<GameDef>, String>>()?;
     Ok(defs)
+}
+
+pub trait ParsePolicy {
+    fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String>;
+    fn handle_element_error(config_name: &str, err: &str) -> Result<(), String>;
+}
+
+pub struct StrictParse;
+impl ParsePolicy for StrictParse {
+    fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String> {
+        Err(format!("Parsing stopped early at line {}, col {}. Unhandled tail: {:.50}", line, col, tail))
+    }
+    fn handle_element_error(config_name: &str, err: &str) -> Result<(), String> {
+        Err(format!("Critical error in '{}': {}", config_name, err))
+    }
+}
+
+pub struct LenientParse;
+impl ParsePolicy for LenientParse {
+    fn on_unparsed_tail(line: u32, col: usize, tail: &str) -> Result<(), String> {
+        eprintln!("WARNING: Unparsed tail at line {}, col {}. Unhandled tail: {:.50}", line, col, tail);
+        Ok(())
+    }
+    fn handle_element_error(config_name: &str, err: &str) -> Result<(), String> {
+        eprintln!("Warning: Skipping game '{}' due to error: {}", config_name, err);
+        Ok(())
+    }
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -164,32 +198,30 @@ impl<'a> PuaMapping<'a> {
     }
 }
 
-fn parse_compound_ch_map(i: &str) -> Result<HashMap<char, String>, String> {
+fn parse_compound_ch_map<P: ParsePolicy>(i: &str) -> Result<HashMap<char, String>, String> {
     let input_span = Span::new(i);
 
     let (remaining, mappings) = separated_list0(line_ending, PuaMapping::parse)(input_span)
         .finish()
         .map_err(|e| {
+            let fragment = e.input.fragment();
+
+            let limit = fragment.len().min(256);
+            let peek = &fragment[..limit];
+
+            let end = peek.find('\n').unwrap_or(limit);
+            let error_line_text = &peek[..end].trim_end_matches('\r');
             format!(
                 "Parsing error at line {}, column {}: {}",
                 e.input.location_line(),
                 e.input.get_utf8_column(),
-                e
+                error_line_text
             )
         })?;
 
     let tail = remaining.fragment().trim();
     if !tail.is_empty() {
-        let preview = if tail.len() > 50 { format!("{:.50}...", tail) } else { tail.to_owned() };
-        return Err(format!(
-            "Parsing stopped early at line {}, column {}. \
-            Unhandled data: {:?}. \
-            Successfully collected: {} items.",
-            remaining.location_line(),
-            remaining.get_utf8_column(),
-            preview,
-            mappings.len()
-        ));
+        P::on_unparsed_tail(remaining.location_line(), remaining.get_utf8_column(), tail)?;
     }
 
     let mappings = mappings
